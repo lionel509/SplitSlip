@@ -1,0 +1,10 @@
+# secrets
+.env
+.env.*
+# real receipts never leave this machine; public fixtures go in fixtures/ with made-up names
+receipts/
+# build output
+target/
+node_modules/
+dist/
+.DS_Store
