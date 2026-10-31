@@ -327,6 +327,64 @@ fn remind_skips_cancelled_and_waits_between_reminders() {
 }
 
 #[test]
+fn draft_that_paypal_already_sent_gets_sent_at_and_is_reminded() {
+    let now = 10_000_000i64;
+    let fake = Fake::new(vec![
+        Response { status: 200, body: r#"{"status":"SENT"}"#.into() },
+        // remind_due refreshes K and M, then reminds both.
+        Response { status: 200, body: r#"{"status":"SENT"}"#.into() },
+        Response { status: 200, body: r#"{"status":"SENT"}"#.into() },
+        Response { status: 204, body: String::new() },
+        Response { status: 204, body: String::new() },
+    ]);
+    let mut s = weekend_split();
+    for p in s.people.iter_mut() {
+        match p.initials.as_str() {
+            "K" => {
+                p.invoice_id = Some("INV-K".into());
+                p.status = Some("DRAFT".into());
+            }
+            "M" => {
+                p.invoice_id = Some("INV-M".into());
+                p.status = Some("SENT".into());
+                p.sent_at = Some(now);
+            }
+            _ => {}
+        }
+    }
+    // The first send reached PayPal but its reply was lost: K is still a stored DRAFT.
+    invoice_all(&pp(&fake), "TOK", &mut s, "note", now).unwrap();
+    let k = person(&s, "K");
+    assert_eq!(k.status.as_deref(), Some("SENT"));
+    assert_eq!(k.sent_at, Some(now));
+    assert_eq!(fake.calls.borrow().len(), 1, "one status GET, no create and no send");
+
+    // Four days later remind_due must see K, or the draft is never chased.
+    let reminded = remind_due(&pp(&fake), "TOK", &mut s, now + 4 * 86400, 3).unwrap();
+    assert_eq!(reminded.len(), 2, "{reminded:?}");
+    assert!(reminded.contains(&"INV-K".to_string()), "{reminded:?}");
+}
+
+#[test]
+fn remind_includes_unpaid_invoices() {
+    let now = 10_000_000i64;
+    let fake = Fake::new(vec![
+        Response { status: 200, body: r#"{"status":"UNPAID"}"#.into() },
+        Response { status: 204, body: String::new() },
+    ]);
+    let mut s = weekend_split();
+    for p in s.people.iter_mut() {
+        if p.initials == "K" {
+            p.invoice_id = Some("INV-K".into());
+            p.sent_at = Some(now - 4 * 86400);
+        }
+    }
+    let reminded = remind_due(&pp(&fake), "TOK", &mut s, now, 3).unwrap();
+    assert_eq!(reminded, vec!["INV-K".to_string()]);
+    assert!(fake.calls.borrow()[1].url.ends_with("/INV-K/remind"));
+}
+
+#[test]
 fn rollup_does_not_count_cancelled_as_open() {
     let items = vec![InvoiceSummary {
         id: "INV2-X".into(),

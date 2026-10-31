@@ -204,7 +204,10 @@ pub fn invoice_all(pp: &PayPal, token: &str, split: &mut Split, note: &str, now:
                 // A draft from an earlier run: PayPal may already have sent it.
                 let status = pp.get_status(token, &id)?;
                 if status != "DRAFT" {
-                    split.people[i].status = Some(status);
+                    // Sent by an earlier run whose reply was lost: remind_due needs sent_at to count from.
+                    let p = &mut split.people[i];
+                    p.sent_at.get_or_insert(now);
+                    p.status = Some(status);
                     continue;
                 }
                 id
@@ -234,7 +237,7 @@ pub fn refresh(pp: &PayPal, token: &str, split: &mut Split) -> Result<()> {
     Ok(())
 }
 
-/// Refresh, then remind open invoices (SENT or PARTIALLY_PAID) that are due. The first reminder is
+/// Refresh, then remind open invoices (SENT, PARTIALLY_PAID or UNPAID) that are due. The first reminder is
 /// due days after sending, later ones days after the previous reminder. Returns reminded ids.
 pub fn remind_due(pp: &PayPal, token: &str, split: &mut Split, now: i64, days: i64) -> Result<Vec<String>> {
     refresh(pp, token, split)?;
@@ -243,7 +246,7 @@ pub fn remind_due(pp: &PayPal, token: &str, split: &mut Split, now: i64, days: i
         let (Some(id), Some(sent_at)) = (p.invoice_id.clone(), p.sent_at) else {
             continue;
         };
-        let open = matches!(p.status.as_deref(), Some("SENT") | Some("PARTIALLY_PAID"));
+        let open = matches!(p.status.as_deref(), Some("SENT") | Some("PARTIALLY_PAID") | Some("UNPAID"));
         let since = p.last_reminder.unwrap_or(sent_at);
         if open && now - since >= days * 86400 {
             pp.remind(token, &id, REMIND_NOTE)?;
