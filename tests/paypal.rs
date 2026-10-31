@@ -396,3 +396,55 @@ fn rollup_does_not_count_cancelled_as_open() {
     let rows = rollup(&items, None);
     assert_eq!((rows[0].count, rows[0].paid, rows[0].open), (1, 0, 0));
 }
+#[test]
+fn deleted_invoice_does_not_block_other_reminders() {
+    let now = 1_800_000_000;
+    let mut s = weekend_split();
+    for p in s.people.iter_mut() {
+        match p.initials.as_str() {
+            "K" => {
+                p.invoice_id = Some("INV-DEL".into());
+                p.status = Some("SENT".into());
+                p.sent_at = Some(now - 9 * 86400);
+            }
+            "M" => {
+                p.invoice_id = Some("INV-M".into());
+                p.status = Some("SENT".into());
+                p.sent_at = Some(now - 4 * 86400);
+            }
+            _ => {}
+        }
+    }
+    let ids: Vec<String> = s.people.iter().filter_map(|p| p.invoice_id.clone()).collect();
+    let k_first = ids[0] == "INV-DEL";
+    let mut rs = vec![
+        Response { status: 404, body: r#"{"name":"INVOICE_NOT_FOUND"}"#.into() },
+        Response { status: 200, body: r#"{"status":"SENT"}"#.into() },
+        Response { status: 204, body: String::new() },
+    ];
+    if !k_first {
+        rs.swap(0, 1);
+    }
+    let fake = Fake::new(rs);
+    let reminded = remind_due(&pp(&fake), "TOK", &mut s, now, 3).unwrap();
+    assert_eq!(reminded, vec!["INV-M".to_string()]);
+}
+
+#[test]
+fn deleted_draft_does_not_block_later_invoices() {
+    let mut s = weekend_split();
+    for p in s.people.iter_mut() {
+        if p.initials == "K" {
+            p.invoice_id = Some("INV-DEL".into());
+            p.status = Some("DRAFT".into());
+        }
+    }
+    let fake = Fake::new(vec![
+        Response { status: 404, body: r#"{"name":"INVOICE_NOT_FOUND"}"#.into() },
+        Response { status: 201, body: r#"{"id":"INV-NEW"}"#.into() },
+        Response { status: 202, body: String::new() },
+    ]);
+    let res = invoice_all(&pp(&fake), "TOK", &mut s, "note", 1_800_000_000);
+    assert!(res.is_err());
+    assert!(s.people.iter().any(|p| p.invoice_id.as_deref() == Some("INV-NEW")));
+}

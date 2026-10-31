@@ -195,10 +195,20 @@ pub fn needs_invoice(p: &PersonTotal, me: &str) -> bool {
 /// DRAFT behind that the next run sends again instead of creating a second invoice.
 pub fn invoice_all(pp: &PayPal, token: &str, split: &mut Split, note: &str, now: i64) -> Result<()> {
     let me = split.me.clone();
+    let mut errs = Vec::new();
     for i in 0..split.people.len() {
         if !needs_invoice(&split.people[i], &me) {
             continue;
         }
+        if let Err(e) = invoice_one(pp, token, split, i, note, now) {
+            errs.push(format!("{}: {e}", split.people[i].initials));
+        }
+    }
+    if errs.is_empty() { Ok(()) } else { Err(errs.join("; ").into()) }
+}
+
+fn invoice_one(pp: &PayPal, token: &str, split: &mut Split, i: usize, note: &str, now: i64) -> Result<()> {
+    {
         let id = match split.people[i].invoice_id.clone() {
             Some(id) => {
                 // A draft from an earlier run: PayPal may already have sent it.
@@ -208,7 +218,7 @@ pub fn invoice_all(pp: &PayPal, token: &str, split: &mut Split, note: &str, now:
                     let p = &mut split.people[i];
                     p.sent_at.get_or_insert(now);
                     p.status = Some(status);
-                    continue;
+                    return Ok(());
                 }
                 id
             }
@@ -228,19 +238,34 @@ pub fn invoice_all(pp: &PayPal, token: &str, split: &mut Split, note: &str, now:
     Ok(())
 }
 
-pub fn refresh(pp: &PayPal, token: &str, split: &mut Split) -> Result<()> {
+/// Refresh every invoice; a failing one is skipped and reported, so it cannot block the rest.
+pub fn refresh_each(pp: &PayPal, token: &str, split: &mut Split) -> Vec<String> {
+    let mut errs = Vec::new();
     for p in split.people.iter_mut() {
         if let Some(id) = p.invoice_id.clone() {
-            p.status = Some(pp.get_status(token, &id)?);
+            match pp.get_status(token, &id) {
+                Ok(s) => p.status = Some(s),
+                Err(e) => {
+                    p.status = None; // unknown: never remind an invoice we could not read
+                    errs.push(format!("{}: {e}", p.initials));
+                }
+            }
         }
     }
-    Ok(())
+    errs
+}
+
+pub fn refresh(pp: &PayPal, token: &str, split: &mut Split) -> Result<()> {
+    let errs = refresh_each(pp, token, split);
+    if errs.is_empty() { Ok(()) } else { Err(errs.join("; ").into()) }
 }
 
 /// Refresh, then remind open invoices (SENT, PARTIALLY_PAID or UNPAID) that are due. The first reminder is
 /// due days after sending, later ones days after the previous reminder. Returns reminded ids.
 pub fn remind_due(pp: &PayPal, token: &str, split: &mut Split, now: i64, days: i64) -> Result<Vec<String>> {
-    refresh(pp, token, split)?;
+    for e in refresh_each(pp, token, split) {
+        eprintln!("splitslip: skipped {e}");
+    }
     let mut reminded = Vec::new();
     for p in split.people.iter_mut() {
         let (Some(id), Some(sent_at)) = (p.invoice_id.clone(), p.sent_at) else {
