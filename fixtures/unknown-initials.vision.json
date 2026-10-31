@@ -1,5 +1,5 @@
 {"lines":[
- {"kind":"item","item_no":"1001","text":"KS ORG EGGS 24CT","expanded":"Organic eggs, 24 count","price":"7.99","tax_flag":null,"written":["L","K"]},
+ {"kind":"item","item_no":"1001","text":"KS ORG EGGS 24CT","expanded":"Organic eggs, 24 count","price":"7.99","tax_flag":null,"written":["Q"]},
  {"kind":"item","item_no":"1002","text":"KS PAPER TOWEL","expanded":"Paper towels, 12 rolls","price":"21.99","tax_flag":"A","written":["L","K","M"]},
  {"kind":"item","item_no":"1003","text":"ROTISSERIE CHKN","expanded":"Rotisserie chicken","price":"4.99","tax_flag":null,"written":["M"]},
  {"kind":"coupon","item_no":"1002","text":"TPD/1002","price":"-4.00","written":[]},
