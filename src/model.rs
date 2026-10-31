@@ -6,7 +6,11 @@ pub type Result<T> = std::result::Result<T, String>;
 
 /// Cents to a dollars string: 4815 -> "48.15", -400 -> "-4.00".
 pub fn dollars(c: Cents) -> String {
-    todo!("U2/U1 impl: dollars({c})")
+    {
+        let sign = if c < 0 { "-" } else { "" };
+        let a = c.unsigned_abs();
+        format!("{sign}{}.{:02}", a / 100, a % 100)
+    }
 }
 
 pub const TAXABLE_FLAGS: &[&str] = &["A"];
