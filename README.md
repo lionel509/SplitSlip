@@ -26,7 +26,7 @@ You need Rust (`cargo`). Install it with `brew install rust` or from [rustup.rs]
 cargo run -- scan fixtures/weekend.vision.json --people fixtures/people.json
 ```
 
-This runs the full split on a synthetic receipt with no network calls and writes `out/weekend.json`. The last line reads `Sum of shares 48.15 = receipt total 48.15 OK`.
+This runs the full split on a synthetic receipt with no network calls and writes `out/weekend.json`. The sum line reads `Sum of shares 48.15 = receipt total 48.15 OK`, and the last line says where the split was saved.
 
 ## Run it for real
 
@@ -49,6 +49,8 @@ cargo run -- rollup --month 2026-11                            # totals per pers
 ```
 
 `rollup` reads the first 100 invoices on the account, which is plenty for a demo.
+
+If a send fails partway, run `invoice` again: people whose invoice was created but not sent are sent that invoice, and nobody gets a second one. A re-`scan` to the same file is refused once any invoice exists; use `--out` for a new file.
 
 ### Fixing a misread
 

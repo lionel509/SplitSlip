@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::config::{from_env, load_dotenv, require, Config};
 use crate::http::{Transport, Ureq};
-use crate::model::{dollars, Cents, Result};
+use crate::model::{dollars, Cents, Result, PAID_STATUSES};
 use crate::paypal::{self, PayPal};
 use crate::{receipt, split, vision};
 
@@ -80,15 +80,22 @@ fn positionals(args: &[String]) -> Vec<String> {
     out
 }
 
+/// Value of `name value` or `name=value`; None when the option is absent.
 fn opt(args: &[String], name: &str) -> Result<Option<String>> {
-    match args.iter().position(|a| a == name) {
-        None => Ok(None),
-        Some(i) => args
-            .get(i + 1)
-            .cloned()
-            .map(Some)
-            .ok_or_else(|| format!("{name} needs a value")),
+    let eq = format!("{name}=");
+    for (i, a) in args.iter().enumerate() {
+        if a == name {
+            return args
+                .get(i + 1)
+                .cloned()
+                .map(Some)
+                .ok_or_else(|| format!("{name} needs a value"));
+        }
+        if let Some(v) = a.strip_prefix(eq.as_str()) {
+            return Ok(Some(v.to_string()));
+        }
     }
+    Ok(None)
 }
 
 fn has_flag(args: &[String], name: &str) -> bool {
@@ -165,6 +172,22 @@ fn cmd_scan(args: &[String]) -> Result<()> {
     let r = receipt::from_vision(&v)?;
     let people = split::load_people(Path::new(&people_path))?;
     let s = split::split(&r, &people, &stem)?;
+    // A re-scan must not wipe invoice ids: that would send everyone a second invoice.
+    if let Ok(prev) = split::load(&out) {
+        let invoiced: Vec<&str> = prev
+            .people
+            .iter()
+            .filter(|p| p.invoice_id.is_some())
+            .map(|p| p.initials.as_str())
+            .collect();
+        if !invoiced.is_empty() {
+            return Err(format!(
+                "{} already has invoices for {}; scan to a new file with --out",
+                out.display(),
+                invoiced.join(", ")
+            ));
+        }
+    }
     println!("{}", split::render_items(&r));
     println!();
     println!("{}", split::render_people(&s));
@@ -184,10 +207,10 @@ fn cmd_invoice(args: &[String]) -> Result<()> {
     let pending: Vec<_> = s
         .people
         .iter()
-        .filter(|p| p.initials != s.me && p.invoice_id.is_none())
+        .filter(|p| paypal::needs_invoice(p, &s.me))
         .collect();
     if pending.is_empty() {
-        println!("Nothing to send: every invoice already exists.");
+        println!("Nothing to send: every invoice already exists or nobody owes anything.");
         return Ok(());
     }
     let total: Cents = pending.iter().map(|p| p.total).sum();
@@ -281,6 +304,10 @@ fn cmd_mark_paid(args: &[String]) -> Result<()> {
         .clone()
         .ok_or_else(|| format!("{initials} has no invoice yet; run `invoice` first"))?;
     let amount = person.total;
+    if PAID_STATUSES.contains(&person.status.as_deref().unwrap_or("")) {
+        println!("{initials} is already paid; nothing recorded.");
+        return Ok(());
+    }
 
     let cfg = from_env();
     let client = http();

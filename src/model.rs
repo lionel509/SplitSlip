@@ -15,19 +15,31 @@ pub fn dollars(c: Cents) -> String {
 
 pub const TAXABLE_FLAGS: &[&str] = &["A"];
 pub const PAID_STATUSES: &[&str] = &["PAID", "MARKED_AS_PAID", "PAID_EXTERNAL"];
+/// Invoices that will never be paid: nothing is owed, nothing is reminded.
+pub const VOID_STATUSES: &[&str] = &["CANCELLED", "REFUNDED", "MARKED_AS_REFUNDED"];
+
+/// Gemini sometimes returns a number where the schema asks for a string (item_no 1001, price 7.99).
+fn loose_string<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<String>, D::Error> {
+    use serde::Deserialize;
+    Ok(match Option::<serde_json::Value>::deserialize(d)? {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) => Some(s),
+        Some(other) => Some(other.to_string()),
+    })
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VisionLine {
     pub kind: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "loose_string")]
     pub item_no: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "loose_string")]
     pub text: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "loose_string")]
     pub expanded: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "loose_string")]
     pub price: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "loose_string")]
     pub tax_flag: Option<String>,
     #[serde(default)]
     pub written: Vec<String>,
@@ -89,6 +101,9 @@ pub struct PersonTotal {
     /// unix seconds
     #[serde(default)]
     pub sent_at: Option<i64>,
+    /// unix seconds of the last reminder sent
+    #[serde(default)]
+    pub last_reminder: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

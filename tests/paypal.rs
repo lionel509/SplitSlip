@@ -240,3 +240,101 @@ fn rollup_groups_by_email_and_filters_month() {
     assert_eq!(all[0].email, "kai@example.com");
     assert_eq!((all[0].count, all[0].paid, all[0].open), (2, 3313, 0));
 }
+
+#[test]
+fn failed_send_keeps_the_draft_id_and_resend_creates_nothing() {
+    let fake = Fake::new(vec![
+        Response { status: 201, body: r#"{"id":"INV-K"}"#.into() },
+        Response { status: 500, body: r#"{"name":"INTERNAL_SERVICE_ERROR"}"#.into() },
+    ]);
+    let mut s = weekend_split();
+    assert!(invoice_all(&pp(&fake), "TOK", &mut s, "note", 1).is_err());
+    let k = person(&s, "K");
+    assert_eq!(k.invoice_id.as_deref(), Some("INV-K"));
+    assert_eq!(k.status.as_deref(), Some("DRAFT"));
+    assert_eq!(k.sent_at, None);
+
+    // Second run: PayPal still shows the draft, so only the send is repeated.
+    let fake = Fake::new(vec![
+        Response { status: 200, body: r#"{"id":"INV-K","status":"DRAFT"}"#.into() },
+        Response { status: 202, body: String::new() },
+        Response { status: 201, body: fx("paypal/create.json") },
+        Response { status: 202, body: String::new() },
+    ]);
+    invoice_all(&pp(&fake), "TOK", &mut s, "note", 2).unwrap();
+    let calls = fake.calls.borrow();
+    assert_eq!(calls[1].method, "POST");
+    assert!(calls[1].url.ends_with("/INV-K/send"), "{}", calls[1].url);
+    let creates = calls.iter().filter(|c| c.url.ends_with("/v2/invoicing/invoices")).count();
+    assert_eq!(creates, 1, "only M needed a new invoice");
+    assert_eq!(person(&s, "K").status.as_deref(), Some("SENT"));
+    assert_eq!(person(&s, "K").sent_at, Some(2));
+}
+
+#[test]
+fn zero_total_person_is_not_invoiced() {
+    let fake = Fake::new(vec![
+        Response { status: 201, body: fx("paypal/create.json") },
+        Response { status: 202, body: String::new() },
+        Response { status: 201, body: fx("paypal/create.json") },
+        Response { status: 202, body: String::new() },
+    ]);
+    let mut s = weekend_split();
+    let mut zed = person(&s, "K").clone();
+    zed.initials = "Z".into();
+    zed.name = "Zed".into();
+    zed.email = "zed@example.com".into();
+    zed.shares.clear();
+    zed.total = 0;
+    s.people.push(zed);
+    invoice_all(&pp(&fake), "TOK", &mut s, "note", 1).unwrap();
+    assert_eq!(fake.calls.borrow().len(), 4, "K and M only");
+    assert_eq!(person(&s, "Z").invoice_id, None);
+}
+
+#[test]
+fn remind_skips_cancelled_and_waits_between_reminders() {
+    let fake = Fake::new(vec![
+        Response { status: 200, body: r#"{"status":"CANCELLED"}"#.into() },
+        Response { status: 200, body: r#"{"status":"SENT"}"#.into() },
+        Response { status: 204, body: String::new() },
+        Response { status: 200, body: r#"{"status":"CANCELLED"}"#.into() },
+        Response { status: 200, body: r#"{"status":"SENT"}"#.into() },
+    ]);
+    let now = 10_000_000i64;
+    let mut s = weekend_split();
+    for p in s.people.iter_mut() {
+        match p.initials.as_str() {
+            "K" => {
+                p.invoice_id = Some("INV-K".into());
+                p.sent_at = Some(now - 4 * 86400);
+            }
+            "M" => {
+                p.invoice_id = Some("INV-M".into());
+                p.sent_at = Some(now - 4 * 86400);
+            }
+            _ => {}
+        }
+    }
+    let first = remind_due(&pp(&fake), "TOK", &mut s, now, 3).unwrap();
+    assert_eq!(first, vec!["INV-M".to_string()]);
+    // A day later nothing is due: the last reminder was only a day ago.
+    let second = remind_due(&pp(&fake), "TOK", &mut s, now + 86400, 3).unwrap();
+    assert!(second.is_empty(), "{second:?}");
+    let calls = fake.calls.borrow();
+    assert_eq!(calls.len(), 5);
+    assert!(calls[2].url.ends_with("/INV-M/remind"), "{}", calls[2].url);
+}
+
+#[test]
+fn rollup_does_not_count_cancelled_as_open() {
+    let items = vec![InvoiceSummary {
+        id: "INV2-X".into(),
+        status: "CANCELLED".into(),
+        total: 500,
+        email: "mo@example.com".into(),
+        invoice_date: "2026-11-07".into(),
+    }];
+    let rows = rollup(&items, None);
+    assert_eq!((rows[0].count, rows[0].paid, rows[0].open), (1, 0, 0));
+}

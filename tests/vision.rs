@@ -90,3 +90,12 @@ fn mime_for_extensions() {
     assert_eq!(mime_for(Path::new("a.webp")).unwrap(), "image/webp");
     assert!(mime_for(Path::new("a.heic")).is_err());
 }
+
+#[test]
+fn numeric_item_no_and_price_parse_as_text() {
+    let text = r#"{"lines":[{"kind":"item","item_no":1001,"text":"KS ORG EGGS 24CT","expanded":"Organic eggs","price":7.99,"tax_flag":null,"written":["L","K"]}]}"#;
+    let body = serde_json::json!({"candidates": [{"content": {"parts": [{"text": text}]}}]}).to_string();
+    let v = parse_response(&body).expect("numeric item_no and price are read as text");
+    assert_eq!(v.lines[0].item_no.as_deref(), Some("1001"));
+    assert_eq!(v.lines[0].price.as_deref(), Some("7.99"));
+}

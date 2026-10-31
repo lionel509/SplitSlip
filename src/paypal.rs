@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use serde_json::{json, Value};
 
 use crate::http::{base64, Request, Response, Transport};
-use crate::model::{dollars, Cents, InvoiceSummary, PersonTotal, Result, RollupRow, Split, PAID_STATUSES};
+use crate::model::{
+    dollars, Cents, InvoiceSummary, PersonTotal, Result, RollupRow, Split, PAID_STATUSES, VOID_STATUSES,
+};
 
 /// REST Invoicing v2. Sandbox base: https://api-m.sandbox.paypal.com
 pub struct PayPal<'a> {
@@ -183,16 +185,40 @@ fn parse_amount(s: &str) -> Result<Cents> {
     Ok(if neg { -total } else { total })
 }
 
-/// For each person != me with invoice_id None: create, send, set invoice_id, status SENT, sent_at now.
+/// Someone gets an invoice when they owe money, are not the invoicer, and either have no invoice
+/// yet or have one that was created but never sent (DRAFT).
+pub fn needs_invoice(p: &PersonTotal, me: &str) -> bool {
+    p.initials != me && p.total > 0 && (p.invoice_id.is_none() || p.status.as_deref() == Some("DRAFT"))
+}
+
+/// Create, then send. The id is stored as soon as PayPal returns it, so a failed send leaves a
+/// DRAFT behind that the next run sends again instead of creating a second invoice.
 pub fn invoice_all(pp: &PayPal, token: &str, split: &mut Split, note: &str, now: i64) -> Result<()> {
+    let me = split.me.clone();
     for i in 0..split.people.len() {
-        if split.people[i].initials == split.me || split.people[i].invoice_id.is_some() {
+        if !needs_invoice(&split.people[i], &me) {
             continue;
         }
-        let id = pp.create_invoice(token, &split.people[i], note)?;
+        let id = match split.people[i].invoice_id.clone() {
+            Some(id) => {
+                // A draft from an earlier run: PayPal may already have sent it.
+                let status = pp.get_status(token, &id)?;
+                if status != "DRAFT" {
+                    split.people[i].status = Some(status);
+                    continue;
+                }
+                id
+            }
+            None => {
+                let id = pp.create_invoice(token, &split.people[i], note)?;
+                let p = &mut split.people[i];
+                p.invoice_id = Some(id.clone());
+                p.status = Some("DRAFT".into());
+                id
+            }
+        };
         pp.send_invoice(token, &id)?;
         let p = &mut split.people[i];
-        p.invoice_id = Some(id);
         p.status = Some("SENT".into());
         p.sent_at = Some(now);
     }
@@ -208,18 +234,21 @@ pub fn refresh(pp: &PayPal, token: &str, split: &mut Split) -> Result<()> {
     Ok(())
 }
 
-/// Refresh, then remind unpaid invoices with now - sent_at >= days*86400; returns reminded ids.
+/// Refresh, then remind open invoices (SENT or PARTIALLY_PAID) that are due. The first reminder is
+/// due days after sending, later ones days after the previous reminder. Returns reminded ids.
 pub fn remind_due(pp: &PayPal, token: &str, split: &mut Split, now: i64, days: i64) -> Result<Vec<String>> {
     refresh(pp, token, split)?;
     let mut reminded = Vec::new();
-    for p in split.people.iter() {
-        let (Some(id), Some(sent_at)) = (p.invoice_id.as_ref(), p.sent_at) else {
+    for p in split.people.iter_mut() {
+        let (Some(id), Some(sent_at)) = (p.invoice_id.clone(), p.sent_at) else {
             continue;
         };
-        let unpaid = !PAID_STATUSES.contains(&p.status.as_deref().unwrap_or(""));
-        if unpaid && now - sent_at >= days * 86400 {
-            pp.remind(token, id, REMIND_NOTE)?;
-            reminded.push(id.clone());
+        let open = matches!(p.status.as_deref(), Some("SENT") | Some("PARTIALLY_PAID"));
+        let since = p.last_reminder.unwrap_or(sent_at);
+        if open && now - since >= days * 86400 {
+            pp.remind(token, &id, REMIND_NOTE)?;
+            p.last_reminder = Some(now);
+            reminded.push(id);
         }
     }
     Ok(reminded)
@@ -238,7 +267,7 @@ pub fn rollup(items: &[InvoiceSummary], month: Option<&str>) -> Vec<RollupRow> {
         row.0 += 1;
         if PAID_STATUSES.contains(&it.status.as_str()) {
             row.1 += it.total;
-        } else {
+        } else if !VOID_STATUSES.contains(&it.status.as_str()) {
             row.2 += it.total;
         }
     }

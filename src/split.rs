@@ -77,6 +77,7 @@ pub fn split(r: &Receipt, people: &People, source: &str) -> Result<Split> {
             invoice_id: None,
             status: None,
             sent_at: None,
+            last_reminder: None,
         });
     }
 
@@ -135,10 +136,12 @@ pub fn render_items(r: &Receipt) -> String {
 pub fn render_people(s: &Split) -> String {
     let mut lines = Vec::new();
     for p in &s.people {
-        let email = if p.email.is_empty() {
+        let email = if !p.email.is_empty() {
+            p.email.as_str()
+        } else if p.initials == s.me {
             "(me)"
         } else {
-            p.email.as_str()
+            "(no email)"
         };
         let status = p.status.clone().unwrap_or_else(|| "-".to_string());
         lines.push(format!(
