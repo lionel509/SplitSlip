@@ -128,12 +128,18 @@ impl<'a> PayPal<'a> {
     }
 
     pub fn get_status(&self, token: &str, id: &str) -> Result<String> {
+        self.get_invoice(token, id).map(|(s, _)| s)
+    }
+
+    /// Status plus PayPal's `metadata.first_sent_time` (epoch seconds) when present.
+    pub fn get_invoice(&self, token: &str, id: &str) -> Result<(String, Option<i64>)> {
         let path = format!("/v2/invoicing/invoices/{id}");
         let resp = Self::expect("GET", &path, self.send("GET", &path, vec![Self::bearer(token)], None)?, &[200])?;
         let v: Value = serde_json::from_str(&resp.body).map_err(|e| format!("PayPal get: bad JSON: {e}"))?;
+        let sent = v["metadata"]["first_sent_time"].as_str().and_then(parse_iso);
         v["status"]
             .as_str()
-            .map(str::to_string)
+            .map(|s| (s.to_string(), sent))
             .ok_or_else(|| format!("PayPal get {id}: no status in response"))
     }
 
@@ -249,8 +255,13 @@ fn refresh_failed(pp: &PayPal, token: &str, split: &mut Split) -> (Vec<String>, 
     let mut failed = Vec::new();
     for p in split.people.iter_mut() {
         if let Some(id) = p.invoice_id.clone() {
-            match pp.get_status(token, &id) {
-                Ok(s) => p.status = Some(s),
+            match pp.get_invoice(token, &id) {
+                Ok((s, sent)) => {
+                    if matches!(s.as_str(), "SENT" | "PARTIALLY_PAID" | "UNPAID") && p.sent_at.is_none() {
+                        p.sent_at = sent; // PayPal's own send time; remind_due falls back to `now`
+                    }
+                    p.status = Some(s);
+                }
                 Err(e) => {
                     // Keep the old status so a failed read cannot change what `invoice` does next.
                     failed.push(id);
@@ -336,4 +347,16 @@ pub fn rollup(items: &[InvoiceSummary], month: Option<&str>) -> Vec<RollupRow> {
             open,
         })
         .collect()
+}
+
+/// Parse `YYYY-MM-DDTHH:MM:SS...` (UTC) to epoch seconds.
+fn parse_iso(t: &str) -> Option<i64> {
+    let n = |r: std::ops::Range<usize>| t.get(r)?.parse::<i64>().ok();
+    let (y, m, d, h, mi, se) = (n(0..4)?, n(5..7)?, n(8..10)?, n(11..13)?, n(14..16)?, n(17..19)?);
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(((era * 146097 + doe - 719468) * 86400) + h * 3600 + mi * 60 + se)
 }

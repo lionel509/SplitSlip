@@ -266,6 +266,9 @@ fn cmd_remind(args: &[String]) -> Result<()> {
             .map_err(|_| format!("--days expects a whole number, got '{d}'"))?,
         None => 3,
     };
+    if !(1..=3650).contains(&days) {
+        return Err(format!("--days must be between 1 and 3650, got {days}").into());
+    }
     let mut s = split::load(&path)?;
     let cfg = from_env();
     let client = http();

@@ -466,3 +466,22 @@ fn stored_draft_seen_sent_by_remind_gets_reminded() {
     let r = remind_due(&pp(&fake), "TOK", &mut s, t0 + 4 * 86400, 3).unwrap();
     assert_eq!(r, vec!["INV-K".to_string()]);
 }
+
+#[test]
+fn first_reminder_counts_from_paypal_send_time() {
+    let sent = r#"{"status":"SENT","metadata":{"first_sent_time":"1970-01-02T00:00:00Z"}}"#;
+    let fake = Fake::new(vec![
+        Response { status: 200, body: sent.into() },
+        Response { status: 204, body: String::new() },
+    ]);
+    let mut s = weekend_split();
+    for p in s.people.iter_mut() {
+        if p.initials == "K" {
+            p.invoice_id = Some("INV-K".into());
+            p.status = Some("DRAFT".into());
+        }
+    }
+    let r = remind_due(&pp(&fake), "TOK", &mut s, 86400 + 4 * 86400, 3).unwrap();
+    assert_eq!(r, vec!["INV-K".to_string()]);
+    assert_eq!(person(&s, "K").sent_at, Some(86400));
+}
