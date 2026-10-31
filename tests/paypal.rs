@@ -448,3 +448,21 @@ fn deleted_draft_does_not_block_later_invoices() {
     assert!(res.is_err());
     assert!(s.people.iter().any(|p| p.invoice_id.as_deref() == Some("INV-NEW")));
 }
+
+#[test]
+fn stored_draft_seen_sent_by_remind_gets_reminded() {
+    let sent = || Response { status: 200, body: r#"{"status":"SENT"}"#.into() };
+    let fake = Fake::new(vec![sent(), sent(), Response { status: 204, body: String::new() }]);
+    let t0 = 10_000_000i64;
+    let mut s = weekend_split();
+    for p in s.people.iter_mut() {
+        if p.initials == "K" {
+            p.invoice_id = Some("INV-K".into());
+            p.status = Some("DRAFT".into());
+        }
+    }
+    assert!(remind_due(&pp(&fake), "TOK", &mut s, t0, 3).unwrap().is_empty());
+    assert_eq!(person(&s, "K").sent_at, Some(t0));
+    let r = remind_due(&pp(&fake), "TOK", &mut s, t0 + 4 * 86400, 3).unwrap();
+    assert_eq!(r, vec!["INV-K".to_string()]);
+}

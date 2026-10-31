@@ -277,6 +277,11 @@ pub fn remind_due(pp: &PayPal, token: &str, split: &mut Split, now: i64, days: i
     let mut reminded = Vec::new();
     let mut remind_errs = Vec::new();
     for p in split.people.iter_mut() {
+        if !failed.iter().any(|f| Some(f) == p.invoice_id.as_ref())
+            && matches!(p.status.as_deref(), Some("SENT") | Some("PARTIALLY_PAID") | Some("UNPAID"))
+        {
+            p.sent_at.get_or_insert(now); // a refresh saw it sent before `invoice` stamped it
+        }
         let (Some(id), Some(sent_at)) = (p.invoice_id.clone(), p.sent_at) else {
             continue;
         };
