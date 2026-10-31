@@ -240,19 +240,26 @@ fn invoice_one(pp: &PayPal, token: &str, split: &mut Split, i: usize, note: &str
 
 /// Refresh every invoice; a failing one is skipped and reported, so it cannot block the rest.
 pub fn refresh_each(pp: &PayPal, token: &str, split: &mut Split) -> Vec<String> {
+    refresh_failed(pp, token, split).0
+}
+
+/// Like `refresh_each`, also returning the invoice ids whose read failed (their old status is kept).
+fn refresh_failed(pp: &PayPal, token: &str, split: &mut Split) -> (Vec<String>, Vec<String>) {
     let mut errs = Vec::new();
+    let mut failed = Vec::new();
     for p in split.people.iter_mut() {
         if let Some(id) = p.invoice_id.clone() {
             match pp.get_status(token, &id) {
                 Ok(s) => p.status = Some(s),
                 Err(e) => {
-                    p.status = None; // unknown: never remind an invoice we could not read
+                    // Keep the old status so a failed read cannot change what `invoice` does next.
+                    failed.push(id);
                     errs.push(format!("{}: {e}", p.initials));
                 }
             }
         }
     }
-    errs
+    (errs, failed)
 }
 
 pub fn refresh(pp: &PayPal, token: &str, split: &mut Split) -> Result<()> {
@@ -263,23 +270,39 @@ pub fn refresh(pp: &PayPal, token: &str, split: &mut Split) -> Result<()> {
 /// Refresh, then remind open invoices (SENT, PARTIALLY_PAID or UNPAID) that are due. The first reminder is
 /// due days after sending, later ones days after the previous reminder. Returns reminded ids.
 pub fn remind_due(pp: &PayPal, token: &str, split: &mut Split, now: i64, days: i64) -> Result<Vec<String>> {
-    for e in refresh_each(pp, token, split) {
+    let (errs, failed) = refresh_failed(pp, token, split);
+    for e in &errs {
         eprintln!("splitslip: skipped {e}");
     }
     let mut reminded = Vec::new();
+    let mut remind_errs = Vec::new();
     for p in split.people.iter_mut() {
         let (Some(id), Some(sent_at)) = (p.invoice_id.clone(), p.sent_at) else {
             continue;
         };
+        if failed.contains(&id) {
+            continue; // status unknown this run: never remind what we could not read
+        }
         let open = matches!(p.status.as_deref(), Some("SENT") | Some("PARTIALLY_PAID") | Some("UNPAID"));
         let since = p.last_reminder.unwrap_or(sent_at);
         if open && now - since >= days * 86400 {
-            pp.remind(token, &id, REMIND_NOTE)?;
-            p.last_reminder = Some(now);
-            reminded.push(id);
+            match pp.remind(token, &id, REMIND_NOTE) {
+                Ok(_) => {
+                    p.last_reminder = Some(now);
+                    reminded.push(id);
+                }
+                Err(e) => remind_errs.push(format!("{}: {e}", p.initials)),
+            }
         }
     }
-    Ok(reminded)
+    if remind_errs.is_empty() {
+        Ok(reminded)
+    } else {
+        if !reminded.is_empty() {
+            println!("Reminded: {}", reminded.join(", "));
+        }
+        Err(remind_errs.join("; ").into())
+    }
 }
 
 pub fn rollup(items: &[InvoiceSummary], month: Option<&str>) -> Vec<RollupRow> {
