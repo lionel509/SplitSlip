@@ -1,0 +1,11 @@
+[package]
+name = "splitslip"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Split a warehouse-club receipt to the cent and invoice each person through PayPal Invoicing"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "2"

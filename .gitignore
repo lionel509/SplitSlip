@@ -1,8 +1,11 @@
 # secrets
 .env
 .env.*
-# real receipts never leave this machine; public fixtures go in fixtures/ with made-up names
+!.env.example
+# real receipts and people never leave this machine; public fixtures go in fixtures/ with made-up names
 receipts/
+out/
+people.json
 # build output
 target/
 node_modules/

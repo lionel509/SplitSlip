@@ -1,0 +1,5 @@
+{"items":[
+ {"id":"INV2-A","status":"PAID","detail":{"invoice_date":"2026-11-07"},"amount":{"currency_code":"USD","value":"24.13"},"primary_recipients":[{"billing_info":{"email_address":"kai@example.com"}}]},
+ {"id":"INV2-B","status":"SENT","detail":{"invoice_date":"2026-11-07"},"amount":{"currency_code":"USD","value":"11.51"},"primary_recipients":[{"billing_info":{"email_address":"mo@example.com"}}]},
+ {"id":"INV2-C","status":"PAID","detail":{"invoice_date":"2026-10-02"},"amount":{"currency_code":"USD","value":"9.00"},"primary_recipients":[{"billing_info":{"email_address":"kai@example.com"}}]}
+],"total_pages":1}
